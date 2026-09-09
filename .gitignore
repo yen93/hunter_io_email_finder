@@ -5,8 +5,10 @@ hunter_io_api_key.txt
 *.pem
 *.key
 *_key.txt
-*service-account*.json
+*token*.txt
 *credentials*.json
+*service-account*.json
+*secret*.txt
 
 # Dependencies
 node_modules/

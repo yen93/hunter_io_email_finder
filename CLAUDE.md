@@ -20,7 +20,18 @@ all logic lives in the routine's prompt. This repo holds the API key, the docs
   the data, so it queries by `company` (the `org` value). `enrichment_poc_name`
   is a full name, split on whitespace into first/last.
 - **Supabase** is attached to the routine as an MCP connector (`execute_sql`).
-  Project MAGTestProject, id `aivitcomiywiysrfwqxt`.
+  Project MAGTestProject, id `aivitcomiywiysrfwqxt`. (Supabase reaches the internet
+  through the sandbox's *allowed* MCP proxy — which is why it worked while direct
+  Hunter calls initially did not.)
+- **Egress allowlist is required for Hunter (important gotcha).** The cloud sandbox
+  blocks outbound HTTPS to everything except an allowlist (Anthropic APIs, the MCP
+  proxy, package registries). Early runs failed *every* Hunter call with
+  `connect_rejected (organization policy)` / `CONNECT tunnel failed, 403`. Declaring
+  `user_declared_urls: ["https://api.hunter.io"]` on the routine did NOT fix it — the
+  block is environment-level. The fix was adding `api.hunter.io` to the **Default
+  environment's egress allowlist** manually (done 2026-09-09). If Hunter calls start
+  returning 403 on CONNECT again, check that env allowlist first. Verify with
+  `RemoteTrigger get_run_log` on the run's session id.
 
 ## Behaviour rules baked into the routine (keep these if editing the prompt)
 - Only processes rows matching the agreed filter (verified leads with
