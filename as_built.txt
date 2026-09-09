@@ -40,12 +40,39 @@ AUTOMATIONS / ROUTINES
   UPDATE enrichment_email when found, and ALWAYS set email_finder_is_processed
   = true per attempted row (found or not). Never overwrites an existing email.
 
+PARENT PIPELINE (n8n) — this routine is one step in a larger workflow
+- n8n workflow "Comment Scraping POC Enrichment" (id YAexztVMLu7zp3TN, active).
+  Active path, from a daily 20:30 Schedule Trigger:
+  1) Find POC: SQL pulls linkedin_posts needing a POC -> GPT-4.1-mini classifies
+     "real speaking engagement?" -> if yes, Apify scrapes the post's comments ->
+     JS matches a commenter whose position contains the first word of `org` ->
+     writes enrichment_poc_name/title/linkedin_link (or "not found").
+  2) Find email (Gemini pass): SQL pulls rows with a real POC not yet
+     enrichment_is_processed -> Google Gemini (gemini-3-flash-preview) finds a
+     verified/cited email -> writes enrichment_email + enrichment_email_source.
+  3) Fire fallback: an n8n HTTP Request node fires THIS routine via
+     POST https://api.anthropic.com/v1/claude_code/routines/
+     trig_01KTt7PyrxbDdu7ReQ9Hi8Gp/fire (bearer auth) to fill the emails Gemini
+     left blank. This is the routine's production trigger.
+  Separate daily 21:00 Schedule Trigger exports finished leads
+  (enrichment_email set AND email_finder_is_processed=true AND not yet on sheet)
+  to Google Sheet "ai_scraped_soc_med_leads"
+  (docs.google.com/spreadsheets/d/1svksxHmNBUx9Z20t2kbtHAT1fThcfdCmz5dEp936L7I).
+- Known gaps observed (not owned by this project): nothing sets
+  enrichment_is_processed=true; and Gemini-found emails may never reach the sheet
+  because the export requires email_finder_is_processed=true, which only this
+  routine sets (and it skips rows that already have an email).
+
 CREDENTIALS ON DISK (all gitignored — never committed)
 - hunter_io_api_key.txt — Hunter.io API key.
 - "claude_routine_token - hunter_io_email_finder.txt" — the routine's API trigger
   token, for the user's external trigger. (Covered by .gitignore *token*.txt.)
+- "n8n - Comment Scraping POC Enrichment.json" — n8n workflow export. Contains a
+  live Serper.dev API key hardcoded in a (disabled) HTTP Request node, so it is
+  gitignored (*.json) and never committed. Rotate/scrub that key before sharing.
 
 OTHER
 - No local scripts. All enrichment logic lives in the cloud routine prompt; this
-  repo holds the credentials, the docs, and the chat history.
+  repo holds the credentials, the docs, the n8n export (gitignored), and the
+  chat history.
 ================================================================================

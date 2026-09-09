@@ -8,6 +8,19 @@ Email Finder API and writes it to `enrichment_email`. There is **no local code**
 all logic lives in the routine's prompt. This repo holds the API key, the docs
 (`as_built.txt`), and `chat_history/`.
 
+## How it's triggered in production (parent n8n pipeline)
+This routine is the **email-finding fallback** in a larger n8n workflow, "Comment
+Scraping POC Enrichment" (id `YAexztVMLu7zp3TN`). Nightly the workflow: (1) finds a
+point-of-contact for each verified `linkedin_posts` lead (GPT-4.1-mini classifier
++ Apify comment scraper), (2) does a first email pass with Google Gemini (verified/
+cited emails only, writing `enrichment_email` + `enrichment_email_source`), then
+(3) an n8n **HTTP Request** node fires THIS routine
+(`POST https://api.anthropic.com/v1/claude_code/routines/trig_01KTt7PyrxbDdu7ReQ9Hi8Gp/fire`,
+bearer auth) to fill the emails Gemini left blank. A separate 21:00 trigger exports
+finished leads to the Google Sheet `ai_scraped_soc_med_leads`. The workflow export
+`n8n - Comment Scraping POC Enrichment.json` lives in this folder but is **gitignored
+(`*.json`)** because it embeds a live Serper.dev key in a disabled node.
+
 ## Key architecture / gotchas
 - **The routine runs in Anthropic's cloud, not on this machine.** It therefore
   **cannot read local files.** The Hunter.io API key is embedded directly in the

@@ -1,0 +1,88 @@
+================================================================================
+CHAT HISTORY EXPORT — 2026-09-09
+Session: Understand the parent n8n pipeline that the hunter_io_email_finder
+routine plugs into; start (then abandon) a user-guide Google Doc; run /dcp.
+================================================================================
+
+NOTE ON REDACTIONS: This session read an n8n workflow export
+("n8n - Comment Scraping POC Enrichment.json") that contains a live Serper.dev
+API key hardcoded in an HTTP Request node's X-API-KEY header. That key value is
+replaced with [REDACTED_API_KEY] anywhere it would otherwise appear in this
+transcript. Because the export file embeds that live secret, it has been added
+to .gitignore (*.json) and is NOT committed. (The earlier Hunter.io API key was
+not re-displayed this session.)
+
+--------------------------------------------------------------------------------
+USER:
+"read this n8n wf json file so you have a complete understanding of the whole
+system": C:\Users\Cloverly\claude_code\hunter_io_email_finder\n8n - Comment
+Scraping POC Enrichment.json
+
+--------------------------------------------------------------------------------
+ASSISTANT:
+Read the full 1197-line workflow (name "Comment Scraping POC Enrichment", id
+YAexztVMLu7zp3TN, active). Reported the complete system and flagged a live
+secret: the disabled "HTTP Request1" node hardcodes a Serper.dev key
+([REDACTED_API_KEY]) and the file sits untracked in the repo, so a git add -A
+would commit it — recommended gitignoring the JSON or rotating the key.
+
+Explained the pipeline as three schedule-driven flows and, crucially, where the
+hunter_io_email_finder routine fits: an n8n "HTTP Request" node fires it via
+POST .../claude_code/routines/trig_01KTt7PyrxbDdu7ReQ9Hi8Gp/fire (that is the
+"API trigger" the user set up). Noted the email-finding is two-stage — Google
+Gemini tries first (verified/cited emails only), then the Hunter.io routine is
+the fallback for rows Gemini left blank. Also flagged two possible logic gaps:
+(1) nothing sets enrichment_is_processed=true, and (2) Gemini-found emails may
+never reach the export sheet because the sheet query requires
+email_finder_is_processed=true, which only the Hunter routine sets (and it skips
+rows that already have an email).
+
+--------------------------------------------------------------------------------
+USER:
+"disregard all deactivated nodes. those are only for testing. just follow the
+flow from the first sched trigger."
+
+--------------------------------------------------------------------------------
+ASSISTANT:
+Re-traced the single active path, ignoring the disabled test branch (Limit1,
+HTTP Request1/Serper, Aggregate, and the orphan Limit2). Confirmed the linear
+flow from the first Schedule Trigger (daily 20:30):
+  Stage 1 (Find POC): SQL pull posts with no POC -> Loop -> GPT-4.1-mini
+    classifies "real speaking engagement?" -> if true, Apify scrapes up to 10
+    post comments/replies -> JS picks the commenter whose position contains the
+    first word of `org` -> Update a row (enrichment_poc_name/title/linkedin_link)
+    or Update a row1 (enrichment_poc_name = "not found").
+  Stage 2 (Find email): after the loop, SQL pull rows with a real POC not yet
+    enrichment_is_processed -> Loop -> Google Gemini (gemini-3-flash-preview)
+    finds a verified/cited email -> Update a row2 (enrichment_email + source).
+  Stage 3 (Fire fallback): when that loop finishes, Limit4 -> HTTP Request fires
+    the hunter_io_email_finder Claude routine to fill remaining blank emails.
+Noted the Google-Sheet export (Execute a SQL query2 -> Append row in sheet,
+tab ai_scraped_soc_med_leads) hangs off a SEPARATE Schedule Trigger2 (21:00), so
+it is not part of this chain — it consumes rows the pipeline produces.
+
+--------------------------------------------------------------------------------
+USER:
+/create-user-guide-doc (skill) — produce an end-user Google Doc for the project.
+
+--------------------------------------------------------------------------------
+ASSISTANT:
+Read as_built.txt and CLAUDE.md for grounding, framed the guide around the
+internal team that operates the pipeline and consumes the leads, and asked (via
+AskUserQuestion) for the two facts that shouldn't be invented: the support
+contact and the target Drive folder.
+
+--------------------------------------------------------------------------------
+USER:
+Rejected the question / interrupted, and invoked /dcp instead.
+
+--------------------------------------------------------------------------------
+ASSISTANT:
+Abandoned the user-guide task. Ran /dcp: added *.json to .gitignore so the n8n
+export (with its live Serper key) is never committed, wrote this chat history
+(Serper key redacted), updated as_built.txt and CLAUDE.md with the parent-n8n-
+pipeline context, then committed and pushed.
+
+================================================================================
+END OF EXPORT
+================================================================================

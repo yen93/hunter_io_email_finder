@@ -10,6 +10,10 @@ hunter_io_api_key.txt
 *service-account*.json
 *secret*.txt
 
+# n8n workflow exports — can embed live API keys in node parameters
+# (e.g. the Serper key in this project's workflow). Keep them out of git.
+*.json
+
 # Dependencies
 node_modules/
 
