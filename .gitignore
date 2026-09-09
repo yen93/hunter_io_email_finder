@@ -1,0 +1,16 @@
+# Secrets / credentials — never commit
+hunter_io_api_key.txt
+*.env
+.env
+*.pem
+*.key
+*_key.txt
+*service-account*.json
+*credentials*.json
+
+# Dependencies
+node_modules/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db

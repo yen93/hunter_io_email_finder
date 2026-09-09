@@ -1,0 +1,39 @@
+================================================================================
+AS-BUILT — hunter_io_email_finder
+Last updated: 2026-09-09
+================================================================================
+
+EXTERNAL INTEGRATIONS
+- Hunter.io Email Finder API (https://api.hunter.io/v2/email-finder) — REST GET,
+  called with company={org} + first_name/last_name (split from a full name).
+  Credential: API key in hunter_io_api_key.txt (gitignored). The same key is
+  also embedded in the cloud routine's prompt, because cloud routines cannot
+  read local files — if the key is rotated, update BOTH places.
+- Supabase — project MAGTestProject, id aivitcomiywiysrfwqxt. Accessed by the
+  routine via the Supabase MCP connector (execute_sql). Managed here via the
+  Supabase MCP tools.
+
+DATA STORES
+- Supabase table public.linkedin_posts — the routine reads/writes these columns:
+  status (text), is_verified_lead (bool), enrichment_poc_name (varchar, a full
+  person name), org (text, company name), enrichment_email (text, the output),
+  email_finder_is_processed (bool, the processed flag). No domain/website column
+  exists, so Hunter is queried by company name.
+
+AUTOMATIONS / ROUTINES
+- hunter_io_email_finder (cloud routine, id trig_01KTt7PyrxbDdu7ReQ9Hi8Gp) —
+  https://claude.ai/code/routines/trig_01KTt7PyrxbDdu7ReQ9Hi8Gp
+  Status: PAUSED (enabled=false). Placeholder cron "17 3 * * *" that never fires
+  while disabled; intended to be fired by the user's own external API trigger
+  (POST /v1/code/triggers/trig_01KTt7PyrxbDdu7ReQ9Hi8Gp/run).
+  Model claude-sonnet-5, environment env_01DYHNjMesGeuq9ABo7W6m6f, Supabase MCP
+  attached, allowed_tools [Bash, mcp__Supabase__execute_sql].
+  Behaviour: SELECT qualifying rows (verified leads with poc_name+org but no
+  enrichment_email and not yet processed) -> Hunter Email Finder per row ->
+  UPDATE enrichment_email when found, and ALWAYS set email_finder_is_processed
+  = true per attempted row (found or not). Never overwrites an existing email.
+
+OTHER
+- No local scripts. All logic lives in the cloud routine prompt; this repo holds
+  the API key, the docs, and the chat history.
+================================================================================

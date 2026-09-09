@@ -1,0 +1,104 @@
+================================================================================
+CHAT HISTORY EXPORT — 2026-09-09
+Session: Create a paused Hunter.io email-finder cloud routine that enriches
+enrichment_email in the Supabase linkedin_posts table.
+================================================================================
+
+NOTE ON REDACTIONS: This session involved a live Hunter.io API key. The key was
+read from hunter_io_api_key.txt and embedded into the cloud routine's prompt
+(the only way a cloud agent can access it, since cloud routines cannot read
+local files). Every occurrence of that key value in this transcript has been
+replaced with [REDACTED_API_KEY]. The real key remains only in the local file
+hunter_io_api_key.txt (gitignored) and in the routine config on claude.ai.
+
+--------------------------------------------------------------------------------
+USER:
+Requested four things:
+1. Create a routine called hunter_io_email_finder, kept PAUSED for now (user
+   will set up the API trigger themselves).
+2. Process rows from a specific Supabase query against the linkedin_posts table:
+   rows where (status not in '1A'/'5A' or null), is_verified_lead = true,
+   enrichment_poc_name is present and != 'not found', org is not null,
+   enrichment_email is null, and email_finder_is_processed is null/false.
+3. Use Hunter.io to find the email of each enrichment_poc_name; API key at
+   C:\Users\Cloverly\claude_code\hunter_io_email_finder\hunter_io_api_key.txt.
+4. Update enrichment_email with the email found via Hunter.io.
+
+(Session started in plan mode.)
+
+--------------------------------------------------------------------------------
+ASSISTANT:
+Explored the environment. The working directory contained only
+hunter_io_api_key.txt (key value [REDACTED_API_KEY]). Found related sibling
+projects under claude_code/ (poc_enrichment, batch_mailer, eow_report_maker).
+
+Investigated Supabase: one project, MAGTestProject (id aivitcomiywiysrfwqxt).
+Confirmed the linkedin_posts table has all referenced columns (status text,
+is_verified_lead boolean, enrichment_poc_name varchar, org text, enrichment_email
+text, email_finder_is_processed boolean). Ran the user's filter as a COUNT — 15
+rows matched. Sampled the 15 rows: enrichment_poc_name is a full person name
+(e.g. "Emma Bird"), org is a company name (e.g. "The Marketing Academy"); there
+is NO domain/website column (only linkedin_url, share_linkedin_url, org).
+
+Loaded the `schedule` skill and learned the key architectural constraint:
+routines are CLOUD agents (run in Anthropic's cloud, isolated session), so they
+CANNOT read local files — the Hunter.io key must be embedded in the routine
+prompt. Supabase is an available MCP connector (connector_uuid
+26e9c32b-ce16-47ef-bd69-354069f6fa1c) that can be attached for query/update.
+Hunter.io is NOT a connector, so the routine must call it over HTTP via Bash/curl.
+Hunter's Email Finder accepts a `company` param (no domain needed).
+
+Asked the user three clarifying questions (all answered with the recommended
+option):
+- Processed flag: set email_finder_is_processed = true on EVERY attempted row,
+  found or not (prevents reprocessing / repeated credit spend).
+- Confidence: write ANY non-null email Hunter returns, regardless of score.
+- Run now: NO — leave fully paused; nothing runs until the user's trigger fires.
+
+Wrote the plan to the plan file and exited plan mode (approved).
+
+Created the routine via the RemoteTrigger tool (action: create):
+- name: hunter_io_email_finder
+- id: trig_01KTt7PyrxbDdu7ReQ9Hi8Gp
+- enabled: false (PAUSED); placeholder cron "17 3 * * *" that never fires while
+  disabled
+- model: claude-sonnet-5
+- environment_id: env_01DYHNjMesGeuq9ABo7W6m6f
+- mcp_connections: Supabase (execute_sql)
+- allowed_tools: ["Bash", "mcp__Supabase__execute_sql"]
+- Prompt (self-contained): SELECT the qualifying rows from linkedin_posts; for
+  each, split enrichment_poc_name into first/last, call
+  GET https://api.hunter.io/v2/email-finder?company={org}&first_name={..}
+  &last_name={..}&api_key=[REDACTED_API_KEY] via curl (URL-encoded, ~1s between
+  calls, one retry on 429); write enrichment_email when a non-null email is
+  returned and ALWAYS set email_finder_is_processed = true per attempted row;
+  never overwrite an existing enrichment_email; report a summary.
+
+Create returned HTTP 200. Routine link:
+https://claude.ai/code/routines/trig_01KTt7PyrxbDdu7ReQ9Hi8Gp
+
+Saved a project memory recording the routine (id, purpose, wiring, the
+cloud-can't-read-local-files caveat, and the Supabase project id).
+
+Reported completion to the user, noting: the routine is paused and won't
+auto-fire; the API trigger should call
+POST /v1/code/triggers/trig_01KTt7PyrxbDdu7ReQ9Hi8Gp/run; the key is embedded in
+the prompt and must be updated if rotated; offered to do a live test run later.
+
+--------------------------------------------------------------------------------
+USER:
+/dcp — document, commit, push.
+
+--------------------------------------------------------------------------------
+ASSISTANT:
+Ran the dcp steps. Found this is a brand-new directory: no chat_history/, no
+git repo, no .gitignore, no as_built.txt, no CLAUDE.md. Performed the mandatory
+security scan of the full transcript and redacted the Hunter.io API key. Wrote
+this chat history file, created as_built.txt and CLAUDE.md, created a .gitignore
+(covering the key file and common secret patterns), and initialized git. No git
+remote was configured, so paused to ask the user for the remote URL before
+pushing (per the skill's rule against guessing a remote).
+
+================================================================================
+END OF EXPORT
+================================================================================
