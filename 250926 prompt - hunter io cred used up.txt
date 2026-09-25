@@ -1,0 +1,8 @@
+## problem:
+- we already used up our free 50 hunter io requests. we need to use a fallback service. 
+
+## potential solution:
+im thinking we use  prospeo as fallback. 
+
+## your task:
+can you confirm how much requests are free for a month with prospeo and how many can be fetched per request? do they return emails and roles? those 2 are necessary. can you also check if they return phone numbers in the free tier api requests? tho phone number is just optional for now.

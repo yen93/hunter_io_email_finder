@@ -1,0 +1,39 @@
+========================================================================
+Call the Supabase Edge Function: linkedin_comments_poc_enrichment
+(Clearbit domain -> Hunter.io -> Prospeo email enrichment for linkedin_posts)
+========================================================================
+
+Paste ONE of these lines into Windows Command Prompt (cmd) and press Enter.
+The whole URL is in double quotes so cmd does not treat "&" as a separator.
+No auth header is needed (the function is deployed with verify_jwt=false).
+
+
+1) SAFE TEST - process 2 rows, run inline, and print the JSON summary
+   (spends up to 2 Prospeo credits):
+
+curl -X POST "https://aivitcomiywiysrfwqxt.supabase.co/functions/v1/linkedin_comments_poc_enrichment?limit=2&sync=1"
+
+
+2) NORMAL RUN - process up to 10 rows inline and print the summary:
+
+curl -X POST "https://aivitcomiywiysrfwqxt.supabase.co/functions/v1/linkedin_comments_poc_enrichment?limit=10&sync=1"
+
+
+3) BACKGROUND RUN - fire and return immediately (HTTP 202); the work
+   continues in the background. This is how n8n calls it in production:
+
+curl -X POST "https://aivitcomiywiysrfwqxt.supabase.co/functions/v1/linkedin_comments_poc_enrichment?limit=10"
+
+
+------------------------------------------------------------------------
+Notes
+------------------------------------------------------------------------
+- Change limit=N to process more/fewer rows per call. Keep it modest
+  (<= ~25) so a synchronous call does not hit the edge function time limit.
+- ?sync=1  = run inline and return the summary JSON.
+  (omit it) = background mode, returns {"status":"accepted"} right away.
+- After a run, check Supabase: affected linkedin_posts rows should have
+  enrichment_company_domain, enrichment_email + enrichment_email_source
+  ('hunter' or 'prospeo'), and email_finder_is_processed = true.
+- Prospeo free tier = 75 email credits/month; the function stops calling
+  Prospeo if credits run out and leaves remaining rows retryable.

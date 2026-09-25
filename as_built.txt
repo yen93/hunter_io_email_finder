@@ -1,17 +1,34 @@
 ================================================================================
 AS-BUILT — hunter_io_email_finder
-Last updated: 2026-09-09
+Last updated: 2026-09-25
 ================================================================================
 
 EXTERNAL INTEGRATIONS
+- Email finding is a TWO-PROVIDER CHAIN (since 2026-09-25): Clearbit domain lookup
+  -> Hunter.io -> Prospeo fallback. Emails only (no phone/mobile).
+- Clearbit Autocomplete (https://autocomplete.clearbit.com/v1/companies/suggest
+  ?query={org}) — REST GET, free, NO API key. Resolves a company name to a domain;
+  the routine stores the first result's domain in linkedin_posts.enrichment_company_
+  domain (or 'unresolved' when none). Used to feed Prospeo an https:// company_website.
 - Hunter.io Email Finder API (https://api.hunter.io/v2/email-finder) — REST GET,
-  called with company={org} + first_name/last_name (split from a full name).
-  Credential: API key in hunter_io_api_key.txt (gitignored). The same key is also
-  embedded in the cloud routine's prompt, because cloud routines cannot read local
-  files — if the key is rotated, update BOTH places.
+  called with company={org} + first_name/last_name (split from a full name). Tried
+  FIRST. Email at data.email. Credential: API key in hunter_io_api_key.txt.
+- Prospeo enrich-person API (https://api.prospeo.io/enrich-person) — REST POST,
+  header X-KEY, body {"data":{first_name,last_name,company_name,company_website,
+  linkedin_url?}}. Tried as the FALLBACK on any Hunter miss. Email at
+  response.person.email.email. GOTCHAS: company_website must be a full https:// URL
+  (bare domain -> INVALID_DATAPOINTS); fields nest under "data"; free tier is
+  rate-limited (429 -> ~2s spacing + one retry); free plan = 75 email credits/month
+  (no rollover); classic Email Finder API is deprecated. Credential: API key in
+  prospeo_api_key.txt AND GCP Secret Manager secret "prospeo-api-key" (project
+  claudegwscli-502400, version 1). Gate-checked 2026-09-25: free-tier API access works.
+- All three API keys are embedded in the cloud routine's prompt, because cloud
+  routines cannot read local files — if a key is rotated, update the routine prompt
+  too (and the Prospeo secret).
   NETWORK REQUIREMENT: the cloud routine's sandbox blocks outbound HTTPS by default;
-  api.hunter.io had to be added to the "Default" environment's egress allowlist
-  (done manually 2026-09-09) before Hunter calls succeed. See CLAUDE.md.
+  api.hunter.io (2026-09-09), then api.prospeo.io and autocomplete.clearbit.com
+  (2026-09-25), had to be added to the "Default" environment's egress allowlist
+  manually before calls succeed. See CLAUDE.md.
 - Supabase — project MAGTestProject, id aivitcomiywiysrfwqxt. Accessed by the
   routine via the Supabase MCP connector (execute_sql). Managed here via the
   Supabase MCP tools.
@@ -19,26 +36,51 @@ EXTERNAL INTEGRATIONS
 DATA STORES
 - Supabase table public.linkedin_posts — the routine reads/writes these columns:
   status (text), is_verified_lead (bool), enrichment_poc_name (varchar, a full
-  person name), org (text, company name), enrichment_email (text, the output),
-  email_finder_is_processed (bool, the processed flag). No domain/website column,
-  so Hunter is queried by company name.
-  Current state: first successful run (2026-09-09) processed the backlog — of the
-  qualifying set, 12 rows got an enrichment_email and 7 were marked processed with
-  no match; 0 left unprocessed.
+  person name), org (text, company name), enrichment_poc_linkedin_link (text, an
+  optional Prospeo datapoint), enrichment_company_domain (text, NEW 2026-09-25 —
+  Clearbit-resolved domain, or 'unresolved'), enrichment_email (text, the output),
+  enrichment_email_source (text, now set to 'hunter' or 'prospeo'),
+  email_finder_is_processed (bool, the processed flag).
+  Current state (2026-09-25): 552 rows; 130 candidates (email null + poc_name + org),
+  116 unprocessed at the time of the Prospeo build. The earlier Hunter-only run
+  (2026-09-09) had filled 12 emails / marked 7 no-match.
 
 AUTOMATIONS / ROUTINES
-- hunter_io_email_finder (cloud routine, id trig_01KTt7PyrxbDdu7ReQ9Hi8Gp) —
+- linkedin_comments_poc_enrichment (Supabase Edge Function — PRODUCTION path as of
+  2026-09-25). URL https://aivitcomiywiysrfwqxt.supabase.co/functions/v1/
+  linkedin_comments_poc_enrichment. verify_jwt=false, no inbound auth (matches other
+  functions here). Params ?limit=N (default 10), ?sync=1 (inline + returns summary;
+  default is background 202 via EdgeRuntime.waitUntil). Reads env secrets
+  HUNTER_IO_API_KEY (already set), PROSPEO_API_KEY (must be set), + auto-injected
+  SUPABASE_URL/SERVICE_ROLE_KEY. Same Clearbit->Hunter->Prospeo chain and behaviour as
+  the routine. Source in repo: supabase/functions/linkedin_comments_poc_enrichment/
+  index.ts; redeploy via Supabase MCP deploy_edge_function. This replaced the Claude
+  routine as the thing n8n calls; it was built to save Claude tokens and avoid the
+  egress-allowlist gotcha. Modelled on the existing alternate-lead-finder function.
+  At the END of every run it GETs the n8n completion webhook (d13096b0-... "sheet
+  update" workflow), which REPLACED the daily pg_cron job
+  n8n-linkedin-comment-enrichment-sheet-update (jobid 32) in the separate
+  n8n-production Supabase project (id uwsncuowtzydylfabikj) - that job was deactivated
+  2026-09-25 (cron.alter_job(32, active:=false)). NOTE: n8n-production is a 2nd Supabase
+  project (same org) holding ~20+ pg_cron jobs that net.http_get n8n webhooks nightly.
+- hunter_io_email_finder (cloud routine, id trig_01KTt7PyrxbDdu7ReQ9Hi8Gp) — kept
+  PAUSED as a fallback now that the edge function is the production path. —
   https://claude.ai/code/routines/trig_01KTt7PyrxbDdu7ReQ9Hi8Gp
   Status: PAUSED (enabled=false). Placeholder cron "17 3 * * *" that never fires
   while disabled; fired by the user's own external API trigger
   (POST /v1/code/triggers/trig_01KTt7PyrxbDdu7ReQ9Hi8Gp/run). Verified working.
   Model claude-sonnet-5, environment env_01DYHNjMesGeuq9ABo7W6m6f, Supabase MCP
   attached, allowed_tools [Bash, mcp__Supabase__execute_sql],
-  user_declared_urls ["https://api.hunter.io"].
-  Behaviour: SELECT qualifying rows (verified leads with poc_name+org but no
-  enrichment_email and not yet processed) -> Hunter Email Finder per row ->
-  UPDATE enrichment_email when found, and ALWAYS set email_finder_is_processed
-  = true per attempted row (found or not). Never overwrites an existing email.
+  user_declared_urls ["https://api.hunter.io"] (note: env-level allowlist is what
+  actually matters; see NETWORK REQUIREMENT).
+  Behaviour (updated 2026-09-25): SELECT qualifying rows (verified leads with
+  poc_name+org but no enrichment_email and not yet processed) -> resolve domain via
+  Clearbit into enrichment_company_domain -> Hunter Email Finder per row -> on a
+  Hunter miss, Prospeo enrich-person -> UPDATE enrichment_email + enrichment_email_
+  source ('hunter'/'prospeo') when found. Sets email_finder_is_processed=true only on
+  a definitive answer (found or clean no-match); rows blocked solely by
+  quota/credits/rate-limit/egress are LEFT retryable. Never overwrites an existing
+  email. Emails only.
 
 PARENT PIPELINE (n8n) — this routine is one step in a larger workflow
 - n8n workflow "Comment Scraping POC Enrichment" (id YAexztVMLu7zp3TN, active).
@@ -50,10 +92,11 @@ PARENT PIPELINE (n8n) — this routine is one step in a larger workflow
   2) Find email (Gemini pass): SQL pulls rows with a real POC not yet
      enrichment_is_processed -> Google Gemini (gemini-3-flash-preview) finds a
      verified/cited email -> writes enrichment_email + enrichment_email_source.
-  3) Fire fallback: an n8n HTTP Request node fires THIS routine via
-     POST https://api.anthropic.com/v1/claude_code/routines/
-     trig_01KTt7PyrxbDdu7ReQ9Hi8Gp/fire (bearer auth) to fill the emails Gemini
-     left blank. This is the routine's production trigger.
+  3) Fire fallback: an n8n HTTP Request node (name "HTTP Request") fills the emails
+     Gemini left blank. As of 2026-09-25 it POSTs to the Supabase Edge Function
+     https://aivitcomiywiysrfwqxt.supabase.co/functions/v1/
+     linkedin_comments_poc_enrichment (auth None). Previously it fired the Claude
+     routine via POST .../claude_code/routines/trig_01KT.../fire (bearer auth).
   Separate daily 21:00 Schedule Trigger exports finished leads
   (enrichment_email set AND email_finder_is_processed=true AND not yet on sheet)
   to Google Sheet "ai_scraped_soc_med_leads"
@@ -65,6 +108,8 @@ PARENT PIPELINE (n8n) — this routine is one step in a larger workflow
 
 CREDENTIALS ON DISK (all gitignored — never committed)
 - hunter_io_api_key.txt — Hunter.io API key.
+- prospeo_api_key.txt — Prospeo API key (also in GCP Secret Manager as
+  "prospeo-api-key", project claudegwscli-502400). Gitignored via *_key.txt.
 - "claude_routine_token - hunter_io_email_finder.txt" — the routine's API trigger
   token, for the user's external trigger. (Covered by .gitignore *token*.txt.)
 - "n8n - Comment Scraping POC Enrichment.json" — n8n workflow export. Contains a
