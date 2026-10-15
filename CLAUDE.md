@@ -17,6 +17,19 @@ The identical logic now runs as a Supabase **Edge Function**
 n8n pipeline calls in production. Rationale: the work is deterministic ETL, so this
 removes Claude-token cost and the cloud-sandbox egress-allowlist fragility (Deno edge
 functions have open egress). **The Claude routine is kept paused as a fallback.**
+
+> **Table changed 2026-10-15 (deploy v10): the edge function now enriches
+> `comment_enrichment_leads`, NOT `linkedin_posts`.** New initial query: rows where
+> `is_approved_datetime IS NOT NULL AND enrichment_datetime IS NULL` (order by `id`,
+> limit N). It writes the found address to `email` and stamps `enrichment_datetime =
+> now()` as the processed marker (this table has **no** `email_finder_is_processed`,
+> `enrichment_company_domain`, or `enrichment_email_source` column — so the Clearbit
+> domain is resolved **in-memory only** and no per-provider source is recorded). The
+> PAUSED Claude routine below still describes the OLD `linkedin_posts` behaviour; the
+> column names in the "Behaviour rules" section map as: `enrichment_poc_name`→`name`,
+> `enrichment_poc_linkedin_link`→`link`, `enrichment_email`→`email`,
+> `email_finder_is_processed`(bool)→`enrichment_datetime`(timestamp).
+
 - URL: `https://aivitcomiywiysrfwqxt.supabase.co/functions/v1/linkedin_comments_poc_enrichment`
 - Deployed with `verify_jwt:false`, **no inbound auth** (matches the project's other
   functions, e.g. `alternate-lead-finder`). Anyone with the URL can trigger it.

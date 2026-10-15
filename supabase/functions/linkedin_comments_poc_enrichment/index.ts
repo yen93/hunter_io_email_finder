@@ -1,14 +1,16 @@
 // linkedin_comments_poc_enrichment
-// Email-finding enrichment for the linkedin_posts table. Port of the
+// Email-finding enrichment for the comment_enrichment_leads table. Port of the
 // hunter_io_email_finder Claude routine into a deterministic edge function.
 //
-// Per qualifying row: resolve a company domain via Clearbit Autocomplete (stored
-// in enrichment_company_domain), then try Hunter.io Email Finder, then fall back to
-// Prospeo enrich-person. Writes enrichment_email + enrichment_email_source
-// ('hunter' | 'prospeo'). Emails only (never requests mobile). Sets
-// email_finder_is_processed=true only on a DEFINITIVE answer (email found or clean
-// no-match); rows blocked purely by quota / credits / rate-limit / network are left
-// retryable. Never overwrites an existing non-null enrichment_email.
+// Qualifying rows: is_approved_datetime IS NOT NULL AND enrichment_datetime IS NULL
+// (i.e. approved but not yet enriched). Per row: resolve a company domain via
+// Clearbit Autocomplete (in-memory only — this table has no domain column), then try
+// Hunter.io Email Finder, then fall back to Prospeo enrich-person. Writes the found
+// address to `email`. Emails only (never requests mobile). Stamps
+// enrichment_datetime=now() only on a DEFINITIVE answer (email found, clean no-match,
+// or a row that can never enrich because it lacks a name/org); rows blocked purely by
+// quota / credits / rate-limit / network are left with enrichment_datetime NULL so the
+// next run retries them. Never overwrites an existing non-null `email`.
 //
 // At the VERY END of every run it POSTs to the n8n completion webhook (replaces the
 // old daily schedule that used to trigger the downstream workflow).
@@ -26,6 +28,8 @@ const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const HUNTER_API_KEY = Deno.env.get("HUNTER_IO_API_KEY") ?? "";
 const PROSPEO_API_KEY = Deno.env.get("PROSPEO_API_KEY") ?? "";
 
+const TABLE = "comment_enrichment_leads";
+
 // Downstream n8n workflow, fired once at the end of every run.
 const COMPLETION_WEBHOOK_URL =
   "https://n8n-659687081407.australia-southeast1.run.app/webhook/d13096b0-03af-400a-8f4c-1b37cdaf8a9b";
@@ -40,11 +44,10 @@ const json = (body: unknown, status = 200) =>
   });
 
 interface Row {
-  id: string;
-  enrichment_poc_name: string | null;
+  id: number;
+  name: string | null;
   org: string | null;
-  enrichment_company_domain: string | null;
-  enrichment_poc_linkedin_link: string | null;
+  link: string | null;
 }
 
 type Outcome = "email" | "nomatch" | "retry";
@@ -179,24 +182,19 @@ async function run(limit: number) {
     prospeo_found: 0,
     no_match: 0,
     retryable: 0,
+    skipped_missing_name_org: 0,
     prospeo_credits_exhausted: false,
     webhook_error: null as string | null,
     errors: [] as string[],
   };
 
   try {
+    // new_query: approved but not yet enriched.
     const { data: rows, error } = await supabase
-      .from("linkedin_posts")
-      .select(
-        "id, enrichment_poc_name, org, enrichment_company_domain, enrichment_poc_linkedin_link",
-      )
-      .or("and(status.neq.1A,status.neq.5A),status.is.null")
-      .eq("is_verified_lead", true)
-      .not("enrichment_poc_name", "is", null)
-      .neq("enrichment_poc_name", "not found")
-      .not("org", "is", null)
-      .is("enrichment_email", null)
-      .or("email_finder_is_processed.is.null,email_finder_is_processed.eq.false")
+      .from(TABLE)
+      .select("id, name, org, link")
+      .not("is_approved_datetime", "is", null)
+      .is("enrichment_datetime", null)
       .order("id", { ascending: true })
       .limit(limit);
 
@@ -208,38 +206,41 @@ async function run(limit: number) {
     summary.considered = candidates.length;
     if (candidates.length === 0) return summary;
 
+    const nowIso = () => new Date().toISOString();
     let prospeoCreditsExhausted = false;
 
     for (const row of candidates) {
       const org = (row.org ?? "").trim();
-      const fullName = (row.enrichment_poc_name ?? "").trim();
-      if (!org || !fullName) continue;
+      const fullName = (row.name ?? "").trim();
+
+      // A row that can never enrich (no name/org) is a definitive dead end:
+      // stamp it so it isn't reconsidered every run.
+      if (!org || !fullName || fullName.toLowerCase() === "not found") {
+        const { error: upErr } = await supabase
+          .from(TABLE)
+          .update({ enrichment_datetime: nowIso() })
+          .eq("id", row.id)
+          .is("email", null);
+        if (upErr) summary.errors.push(`update ${row.id}: ${upErr.message}`);
+        else summary.skipped_missing_name_org++;
+        continue;
+      }
+
       const parts = fullName.split(/\s+/);
       const first = parts[0];
       const last = parts.slice(1).join(" ") || parts[0];
 
-      // 1) Domain resolution (only if we don't have one yet).
-      let domain = row.enrichment_company_domain;
-      if (domain === null) {
-        const resolved = await resolveDomain(org);
-        await sleep(500);
-        if (resolved === "transient") {
-          // leave null; try again a future run
-        } else if (resolved) {
-          domain = resolved;
-          summary.domains_resolved++;
-          await supabase
-            .from("linkedin_posts")
-            .update({ enrichment_company_domain: domain })
-            .eq("id", row.id);
-        } else {
-          domain = "unresolved";
-          summary.domains_unresolved++;
-          await supabase
-            .from("linkedin_posts")
-            .update({ enrichment_company_domain: "unresolved" })
-            .eq("id", row.id);
-        }
+      // 1) Domain resolution (in-memory only; no domain column on this table).
+      let domain: string | null = null;
+      const resolved = await resolveDomain(org);
+      await sleep(500);
+      if (resolved === "transient") {
+        // leave null; Prospeo can still try on company_name alone
+      } else if (resolved) {
+        domain = resolved;
+        summary.domains_resolved++;
+      } else {
+        summary.domains_unresolved++;
       }
 
       // 2) Hunter first.
@@ -258,7 +259,7 @@ async function run(limit: number) {
         if (prospeoCreditsExhausted) {
           outcome = "retry";
         } else {
-          const p = await tryProspeo(org, first, last, domain, row.enrichment_poc_linkedin_link);
+          const p = await tryProspeo(org, first, last, domain, row.link);
           await sleep(2000);
           if (p.creditsExhausted) {
             prospeoCreditsExhausted = true;
@@ -279,23 +280,19 @@ async function run(limit: number) {
       // 4) Write back (guard against overwriting an email set meanwhile).
       if (outcome === "email" && email) {
         const { error: upErr } = await supabase
-          .from("linkedin_posts")
-          .update({
-            enrichment_email: email,
-            enrichment_email_source: source,
-            email_finder_is_processed: true,
-          })
+          .from(TABLE)
+          .update({ email, enrichment_datetime: nowIso() })
           .eq("id", row.id)
-          .is("enrichment_email", null);
+          .is("email", null);
         if (upErr) summary.errors.push(`update ${row.id}: ${upErr.message}`);
         else if (source === "hunter") summary.hunter_found++;
         else summary.prospeo_found++;
       } else if (outcome === "nomatch") {
         const { error: upErr } = await supabase
-          .from("linkedin_posts")
-          .update({ email_finder_is_processed: true })
+          .from(TABLE)
+          .update({ enrichment_datetime: nowIso() })
           .eq("id", row.id)
-          .is("enrichment_email", null);
+          .is("email", null);
         if (upErr) summary.errors.push(`update ${row.id}: ${upErr.message}`);
         else summary.no_match++;
       } else {

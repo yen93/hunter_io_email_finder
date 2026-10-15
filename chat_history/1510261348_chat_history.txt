@@ -1,0 +1,92 @@
+================================================================================
+CHAT HISTORY EXPORT — 2026-10-15
+Session: Repoint the linkedin_comments_poc_enrichment edge function from the
+linkedin_posts table to a new comment_enrichment_leads table — new initial
+query (approved-but-not-enriched), write the found address to `email`, stamp
+enrichment_datetime instead of the old email_finder_is_processed flag. Deploy,
+Q&A on whether Hunter is still used, then a 1-row sync test fire. Commit/push
+by the user.
+================================================================================
+
+--------------------------------------------------------------------------------
+USER:
+(Pasted task.) new_query = `select * from comment_enrichment_leads where
+is_approved_datetime is not null and enrichment_datetime is null`. Edge function
+= https://aivitcomiywiysrfwqxt.supabase.co/functions/v1/linkedin_comments_poc_
+enrichment. Task: (1) modify the edge function so its new initial query is
+new_query; (2) update comment_enrichment_leads set email to the found email;
+(3) set enrichment_datetime to the current datetime.
+
+--------------------------------------------------------------------------------
+ASSISTANT:
+Read the current source (supabase/functions/linkedin_comments_poc_enrichment/
+index.ts — the linkedin_posts version) and inspected the new table's schema via
+Supabase execute_sql. comment_enrichment_leads columns: id (bigint), created_at,
+initial_lead_id, name, position, link, is_added_to_sheet, org, is_from_company,
+email, is_approved_datetime, enrichment_datetime. Confirmed the column mapping:
+name=POC, org=company, link=LinkedIn, email=write target, enrichment_datetime=
+processed marker (replaces email_finder_is_processed). This table has NO
+enrichment_company_domain and NO enrichment_email_source column. Checked data:
+33 rows total, 1 pending (id 25 Andrew McGregor / Search4), 0 with emails.
+
+Rewrote index.ts:
+- New select: from comment_enrichment_leads, .not(is_approved_datetime, is null)
+  .is(enrichment_datetime, null), order by id, limit N.
+- Columns remapped (name/org/link/email); interface Row updated.
+- Clearbit domain resolution kept but now IN-MEMORY per row (no domain column to
+  persist to); enrichment_email_source dropped.
+- Processed marker: enrichment_datetime = now() (new Date().toISOString()),
+  written on a definitive answer only. Preserved the retryable refinement: rows
+  blocked by quota/credits/rate-limit/network are left with enrichment_datetime
+  NULL so the next run retries them (mirrors the new_query filter).
+- Added a branch: a row with no name/org (or name "not found") is a definitive
+  dead end -> stamp enrichment_datetime so it isn't reconsidered every run
+  (summary.skipped_missing_name_org).
+- Kept Clearbit->Hunter->Prospeo chain, the overwrite guard (.is("email",null)),
+  and the end-of-run n8n completion webhook unchanged.
+Deployed via Supabase MCP deploy_edge_function (verify_jwt:false) -> version 10,
+status ACTIVE. Did NOT fire it (noted the Prospeo-credit cost and the user's
+test-manually preference), offered a sync test command.
+
+--------------------------------------------------------------------------------
+USER:
+/q (read-only question): "not hunter?"
+
+--------------------------------------------------------------------------------
+ASSISTANT:
+Answered read-only (no changes). Confirmed the deployed function DOES still use
+Hunter: per row it goes Clearbit -> Hunter first (tryHunter) -> Prospeo only as
+a fallback on a Hunter miss. Carried that over unchanged from the previous
+version since the task only covered the table/query/column swap. Laid out the
+options if they want a change — remove Hunter (Clearbit -> Prospeo only), keep
+Hunter-first (current), or Prospeo-first/Hunter-fallback — and asked which.
+
+--------------------------------------------------------------------------------
+USER:
+ok test fire pls
+
+--------------------------------------------------------------------------------
+ASSISTANT:
+Fired the function inline: POST .../linkedin_comments_poc_enrichment?sync=1&
+limit=1. Summary: considered 1, domains_resolved 1, hunter_found 1, no_match 0,
+retryable 0, prospeo_credits_exhausted false, webhook_error null, errors [].
+Verified in the DB (SELECT on id 25): email = andrew@search-4.com.au (found via
+Hunter), enrichment_datetime = 2026-10-15 05:44:54+00 stamped, is_approved_
+datetime unchanged. All three task behaviors confirmed end-to-end; pending
+backlog for this pipeline now 0. Burned one Hunter lookup; Prospeo untouched.
+
+--------------------------------------------------------------------------------
+USER:
+/dcp (save chat history, update as_built.txt + CLAUDE.md + .gitignore; no git).
+
+--------------------------------------------------------------------------------
+ASSISTANT:
+Wrote this chat-history file. Updated as_built.txt and CLAUDE.md to reflect the
+edge function now targeting comment_enrichment_leads (new query, email write
+target, enrichment_datetime marker, in-memory domain, no source column).
+.gitignore already covered all sensitive files — left as is. No git commands run
+(user commits/pushes).
+
+================================================================================
+END OF EXPORT
+================================================================================

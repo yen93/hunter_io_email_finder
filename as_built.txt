@@ -1,15 +1,17 @@
 ================================================================================
 AS-BUILT — hunter_io_email_finder
-Last updated: 2026-09-25
+Last updated: 2026-10-15
 ================================================================================
 
 EXTERNAL INTEGRATIONS
 - Email finding is a TWO-PROVIDER CHAIN (since 2026-09-25): Clearbit domain lookup
   -> Hunter.io -> Prospeo fallback. Emails only (no phone/mobile).
 - Clearbit Autocomplete (https://autocomplete.clearbit.com/v1/companies/suggest
-  ?query={org}) — REST GET, free, NO API key. Resolves a company name to a domain;
-  the routine stores the first result's domain in linkedin_posts.enrichment_company_
-  domain (or 'unresolved' when none). Used to feed Prospeo an https:// company_website.
+  ?query={org}) — REST GET, free, NO API key. Resolves a company name to a domain.
+  The PAUSED Claude routine stores the first result's domain in linkedin_posts.
+  enrichment_company_domain (or 'unresolved'); the edge function (which now targets
+  comment_enrichment_leads — a table with NO domain column) resolves it IN-MEMORY per
+  row and does not persist it. Used to feed Prospeo an https:// company_website.
 - Hunter.io Email Finder API (https://api.hunter.io/v2/email-finder) — REST GET,
   called with company={org} + first_name/last_name (split from a full name). Tried
   FIRST. Email at data.email. Credential: API key in hunter_io_api_key.txt.
@@ -34,7 +36,18 @@ EXTERNAL INTEGRATIONS
   Supabase MCP tools.
 
 DATA STORES
-- Supabase table public.linkedin_posts — the routine reads/writes these columns:
+- Supabase table public.comment_enrichment_leads — the EDGE FUNCTION's current
+  target (since 2026-10-15). Columns it uses: name (text, POC full name), org
+  (text, company), link (text, LinkedIn, optional Prospeo datapoint), email (text,
+  the output), is_approved_datetime (timestamptz — qualifying rows have it NOT NULL),
+  enrichment_datetime (timestamptz — the processed marker: NULL = not yet enriched;
+  set to now() on a definitive answer). Also has: id (bigint), created_at,
+  initial_lead_id, position, is_added_to_sheet, is_from_company. NO
+  enrichment_company_domain and NO enrichment_email_source column (so the edge
+  function keeps domain in-memory and does not record a per-provider source).
+  State (2026-10-15): 33 rows; after a 1-row test fire, 0 pending.
+- Supabase table public.linkedin_posts — the PAUSED Claude routine reads/writes
+  these columns:
   status (text), is_verified_lead (bool), enrichment_poc_name (varchar, a full
   person name), org (text, company name), enrichment_poc_linkedin_link (text, an
   optional Prospeo datapoint), enrichment_company_domain (text, NEW 2026-09-25 —
@@ -57,6 +70,17 @@ AUTOMATIONS / ROUTINES
   index.ts; redeploy via Supabase MCP deploy_edge_function. This replaced the Claude
   routine as the thing n8n calls; it was built to save Claude tokens and avoid the
   egress-allowlist gotcha. Modelled on the existing alternate-lead-finder function.
+  TARGET TABLE CHANGED 2026-10-15 (deploy version 10): the function now enriches
+  comment_enrichment_leads, NOT linkedin_posts. New initial query: rows where
+  is_approved_datetime IS NOT NULL AND enrichment_datetime IS NULL (ordered by id,
+  limit N). Writes the found address to `email`; stamps enrichment_datetime=now() as
+  the processed marker (replaces email_finder_is_processed — this table has no such
+  flag) on a definitive answer (email found, clean no-match, or a row with no
+  name/org that can never enrich); leaves enrichment_datetime NULL when blocked by
+  quota/credits/rate-limit/network so the next run retries. Clearbit domain is
+  in-memory only; no enrichment_email_source is recorded. Never overwrites a non-null
+  `email`. Verified end-to-end 2026-10-15 with a 1-row sync fire (id 25 Andrew
+  McGregor / Search4 -> andrew@search-4.com.au via Hunter).
   At the END of every run it GETs the n8n completion webhook (d13096b0-... "sheet
   update" workflow), which REPLACED the daily pg_cron job
   n8n-linkedin-comment-enrichment-sheet-update (jobid 32) in the separate
@@ -97,6 +121,9 @@ PARENT PIPELINE (n8n) — this routine is one step in a larger workflow
      https://aivitcomiywiysrfwqxt.supabase.co/functions/v1/
      linkedin_comments_poc_enrichment (auth None). Previously it fired the Claude
      routine via POST .../claude_code/routines/trig_01KT.../fire (bearer auth).
+     CAVEAT (2026-10-15): the edge function now enriches comment_enrichment_leads,
+     not linkedin_posts. How the n8n pipeline feeds/reads that new table was not
+     reviewed this session — reconcile before assuming steps 1-2 still align.
   Separate daily 21:00 Schedule Trigger exports finished leads
   (enrichment_email set AND email_finder_is_processed=true AND not yet on sheet)
   to Google Sheet "ai_scraped_soc_med_leads"
